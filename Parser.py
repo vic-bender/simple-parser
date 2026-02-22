@@ -2,6 +2,8 @@ import re
 from typing import List, Tuple, Any, Union
 from ASTNodeDefs import *
 
+# Code written by Victor A. Bender
+
 # A type alias for clarity, representing parts of expressions
 # that can be a full ASTNode or a simple token tuple (like for numbers/identifiers).
 ExprType = Union[ASTNode, Tuple[str, Any]]
@@ -58,9 +60,37 @@ class Lexer:
        tokens: List[Tuple[str, Any]] = [] # setup for later
        keywords = {}
 
-       for name, regex in self.token_specs:
-            pass
-       pass
+       for name, regex in self.token_specs: # finds and maps keywords w/ identifiers
+            if regex.isalpha() == True and regex == regex.lower():
+                keywords[regex] = name
+       
+       for match in re.finditer(self.token_regex, self.code): # loops over all regex matches in order
+            match_kind = match.lastgroup
+            lexeme = match.group()
+
+            if match_kind == 'SKIP': # case handling for all required cases
+                continue
+            elif match_kind == 'MISMATCH':
+                raise SyntaxError("Mismatch Error")
+            elif match_kind == 'NUMBER':
+                tokens.append((match_kind, int(lexeme)))
+            elif match_kind == 'HEXNUMBER':
+                tokens.append((match_kind, lexeme))
+            elif match_kind == 'BOOL':
+                tokens.append((match_kind, lexeme == "True"))
+            elif match_kind == 'IDENTIFIER':
+                mapped_kind = keywords.get(lexeme)
+                if mapped_kind is not None:
+                    tokens.append((mapped_kind, lexeme))
+                else:
+                    tokens.append((match_kind, lexeme))
+            else:
+                tokens.append((match_kind, lexeme))
+                
+       tokens.append(('EOF', None)) # End of File handling
+       self.tokens = tokens
+       return tokens
+
 
 class Parser:
     """
@@ -119,183 +149,221 @@ class Parser:
 
     # TODO: Implement this function
     def parse_statement(self) -> ASTNode:
-        """
-        Why this function is needed: Our language is composed of different kinds of statements
-        (assignments, if-statements, loops, etc.). This function acts as a dispatcher. It needs
-        to figure out which kind of statement is next in the token stream and call the
-        correct specific function to handle it.
+        current_type = self.current_token()[0] # setup
 
-        What this function does: It looks at the type of the `current_token`.
-        - If it's an 'IDENTIFIER', it's likely an assignment (e.g., `x = ...`).
-        - If it's an 'IF', it calls `parse_if_stmt()`.
-        - If it's a 'FOR', it calls `parse_for_stmt()`.
-        - If it's a 'PRINT', it calls `parse_print_stmt()`.
-        This routing is the essence of a top-down recursive descent parser.
-        """
-        pass
+        if current_type == 'IDENTIFIER': # identifier handling
+            variable_token = self.current_token()
+            self.advance()
+            self.expect('EQUALS')
+            
+            assigned_value_expression = self.parse_boolean_expression()
+            return Assignment(variable_token, assigned_value_expression)
+
+        elif current_type == 'IF': # special case handling (defined below)
+            return self.parse_if_stmt()
+        elif current_type == 'FOR':
+            return self.parse_for_stmt()
+        elif current_type == 'PRINT':
+            return self.parse_print_stmt()
+        
+        else: # edge case handling
+            raise SyntaxError("Unexpected Token")
 
     # TODO: Implement this function
     def parse_if_stmt(self) -> IfStatement:
-        """
-        Why this function is needed: To parse the structure of an if-else statement according
-        to the grammar rules.
+        self.expect('IF') # if statement handling
+        condition = self.parse_boolean_expression()
+        self.expect('COLON')
+        then_block = self.parse_block()
 
-        What this function does: It consumes the 'IF' token, then calls `parse_boolean_expression()`
-        to parse the condition. It then expects and consumes a 'COLON', calls `parse_block()`
-        to handle the body of the 'then' clause. After that, it checks for an 'ELSE' token to
-        handle the optional else part, which also has a colon and a block. It constructs and
-        returns an `IfStatement` AST node with the condition, then-block, and optional else-block.
-        """
-        pass
+        else_block = None
+        if self.current_token()[0] == 'ELSE':  # optional else handling
+            self.advance()
+            self.expect('COLON')
+            else_block = self.parse_block()
 
-    # TODO: Implement this function
-    def parse_for_stmt(self) -> ForStatement:
-        """
-        Why this function is needed: To parse the specific syntax of our for-loop.
-
-        What this function does: It consumes tokens in the expected order for a for-loop:
-        'FOR', an identifier for the loop variable, 'EQUALS', an expression for the start value,
-        'TO', an expression for the end value, and a 'COLON'. Finally, it calls `parse_block()`
-        for the loop's body. It bundles all this information into a `ForStatement` AST node.
-        """
-        pass
+        return IfStatement(condition, then_block, else_block)
 
     # TODO: Implement this function
-    def parse_print_stmt(self) -> PrintStatement:
-        """
-        Why this function is needed: To handle the language's built-in print statement.
+    def parse_for_stmt(self) -> ForStatement: # work here is self-explanatory
+        self.expect('FOR')
+        var = self.expect('IDENTIFIER')
+        self.expect('EQUALS')
+        start = self.parse_expression()
+        self.expect('TO')
+        end = self.parse_expression()
+        self.expect('COLON')
+        body = self.parse_block()
+        
+        return ForStatement(var, start, end, body)
 
-        What this function does: It consumes the 'PRINT' token and an opening parenthesis 'LPAREN'.
-        It then calls `parse_arg_list()` to parse the comma-separated expressions inside the
-        parentheses. Finally, it consumes the closing parenthesis 'RPAREN' and returns a
-        `PrintStatement` AST node containing the list of arguments.
-        """
-        pass
+    # TODO: Implement this function
+    def parse_print_stmt(self) -> PrintStatement: # work here is self-explanatory
+        self.expect('PRINT')
+        self.expect('LPAREN')
+        
+        if self.current_token()[0] == 'RPAREN': # handling and calling of arg list function
+            contents = []
+        else:
+            contents = self.parse_arg_list()
+
+        self.expect('RPAREN')
+        
+        return PrintStatement(contents)
 
     # TODO: Implement this function
     def parse_block(self) -> Block:
-        """
-        Why this function is needed: Control flow statements like 'if' and 'for' need to execute
-        a sequence of other statements. A 'block' represents this sequence.
+        statements = [] # setup
+        done = False
 
-        What this function does: It creates a list to hold statements. It then repeatedly calls
-        `parse_statement()` to parse all statements until it reaches a token that signals the end
-        of the block (in our simplified language, 'ELSE' or the end of the file). It returns a
-        `Block` AST node containing the list of parsed statements.
-        """
-        pass
+        while not done: # main loop for execution
+            token_type = self.current_token()[0]
+            
+            if token_type == 'ELSE' or token_type == 'EOF':
+                done = True
+            else:
+                stmt = self.parse_statement()
+                statements.append(stmt)
+
+        block_node = Block(statements) # final return
+        return block_node
 
     # TODO: Implement this function
     def parse_arg_list(self) -> List[ExprType]:
-        """
-        Why this function is needed: To handle comma-separated lists of values, such as in the
-        print statement.
+        arguments = [] # setup
+        expr = self.parse_expression()
+        arguments.append(expr)
 
-        What this function does: It first parses one expression. Then, it enters a loop that
-        continues as long as the current token is a 'COMMA'. Inside the loop, it consumes the
-        comma and parses the next expression. It returns a list of all the parsed expression nodes.
-        """
-        pass
+        token_type = self.current_token()[0] # advance and parse
+        while token_type == 'COMMA':
+            self.advance()
+            expr = self.parse_expression()
+            
+            arguments.append(expr)
+            token_type = self.current_token()[0]
+
+        return arguments
 
     # TODO: Implement this function
     def parse_boolean_expression(self) -> ExprType:
-        """
-        Why this function is needed: This function handles the logical 'OR' operator. To correctly
-        implement operator precedence, we need a separate function for each level of precedence.
-        'OR' has the lowest precedence among logical operators.
-
-        What this function does: It first calls `parse_boolean_term()` to get the left-hand side.
-        Then, it loops as long as it sees an 'OR' token. In the loop, it creates a `LogicalOperation`
-        node with the left side, the 'OR' operator, and the result of parsing the right side.
-        This left-associative structure correctly handles chains like `A or B or C`.
-        """
-        pass
+        left = self.parse_boolean_term() # setup
+        token_type = self.current_token()[0]
+        
+        while token_type == 'OR': # separate into left and right, processing left first
+            self.advance()
+            right = self.parse_boolean_term()
+            left = LogicalOperation(left, ('OR', 'or'), right)
+            token_type = self.current_token()[0]
+        
+        return left
 
     # TODO: Implement this function
     def parse_boolean_term(self) -> ExprType:
-        """
-        Why this function is needed: This handles the 'AND' operator, which has a higher
-        precedence than 'OR'.
-
-        What this function does: Its structure is identical to `parse_boolean_expression`, but
-        it deals with the 'AND' operator and calls `parse_boolean_factor()` for its operands.
-        This ensures that expressions like `A and B or C` are parsed as `(A and B) or C`.
-        """
-        pass
-
-    # TODO: Implement this function
-    def parse_boolean_factor(self) -> ExprType:
-        """
-        Why this function is needed: This handles the unary 'NOT' operator, which has the
-        highest logical precedence.
-
-        What this function does: It checks for a 'NOT' token. If found, it consumes it,
-        recursively calls `parse_boolean_factor()` to parse the expression being negated, and
-        wraps it in a `UnaryOperation` node. If there is no 'NOT', it simply calls the next
-        level of the precedence hierarchy, `parse_comparison()`.
-        """
-        pass
+        left = self.parse_boolean_factor() # setup
+        token_type = self.current_token()[0]
+        
+        while token_type == 'AND': # same type of logic as above (processing left first)
+            self.advance()
+            right = self.parse_boolean_factor()
+            left = LogicalOperation(left, ('AND', 'and'), right)
+            token_type = self.current_token()[0]
+        
+        return left
 
     # TODO: Implement this function
-    def parse_comparison(self) -> ExprType:
-        """
-        Why this function is needed: To parse comparison expressions like `a > b` or `x == 10`.
+    def parse_boolean_factor(self) -> ExprType: # self-explanatory
+        token_type = self.current_token()[0]
+        
+        if token_type == 'NOT':
+            self.advance()
+            expr = self.parse_boolean_factor()
+            return UnaryOperation(('NOT', 'not'), expr)
+        
+        return self.parse_comparison()
 
-        What this function does: It first calls `parse_expression()` to get the left-hand side
-        (an arithmetic expression). It then checks if the current token is a comparison
-        operator ('==', '!=', '>', '<'). If so, it consumes the operator and calls
-        `parse_expression()` again for the right-hand side, creating a `BinaryOperation` node.
-        If not, it just returns the left-hand side node it already parsed.
-        """
-        pass
+    # TODO: Implement this function
+    def parse_comparison(self) -> ExprType: # self-explanatory, same type of structure as above
+        left = self.parse_expression()
+        token_type = self.current_token()[0]
+        
+        while token_type in ('EQ', 'NEQ', 'LESS', 'GREATER'): # recursive to handle x < y < z like cases
+            op = self.current_token()
+            self.advance()
+            right = self.parse_expression()
+            left = BinaryOperation(left, op, right)
+            token_type = self.current_token()[0]
+        
+        return left
 
     # TODO: Implement this function
     def parse_expression(self) -> ExprType:
-        """
-        Why this function is needed: To handle the lowest precedence arithmetic operators:
-        addition ('+') and subtraction ('-').
-
-        What this function does: Following the same pattern as the boolean functions, it first
-        calls `parse_term()` to get a higher-precedence operand. It then loops as long as it
-        sees a 'PLUS' or 'MINUS' token, building `BinaryOperation` nodes in a left-associative way.
-        """
-        pass
+        left = self.parse_term()
+        token_type = self.current_token()[0]
+        
+        while token_type in ('PLUS', 'MINUS'): # left-associative recursion as above
+            op = self.current_token()
+            self.advance()
+            right = self.parse_term()
+            left = BinaryOperation(left, op, right)
+            token_type = self.current_token()[0]
+        
+        return left
 
     # TODO: Implement this function
-    def parse_term(self) -> ExprType:
-        """
-        Why this function is needed: To handle multiplication ('*'), division ('/'), and modulo ('%'),
-        which have higher precedence than addition and subtraction.
-
-        What this function does: It calls `parse_factor()` to get its operands and loops on
-        '*', '/', and '%' operators. This ensures that `a + b * c` is correctly parsed as `a + (b * c)`.
-        """
-        pass
+    def parse_term(self) -> ExprType: # same structure as parse_expression
+        left = self.parse_factor()
+        token_type = self.current_token()[0]
+        
+        while token_type in ('MULTIPLY', 'DIVIDE', 'MODULO'):
+            op = self.current_token()
+            self.advance()
+            right = self.parse_factor()
+            left = BinaryOperation(left, op, right)
+            token_type = self.current_token()[0]
+        
+        return left
 
     # TODO: Implement this function
     def parse_factor(self) -> ExprType:
-        """
-        Why this function is needed: To handle unary plus and minus operators (e.g., `-5`).
-        These have higher precedence than multiplication.
-
-        What this function does: It checks for a 'PLUS' or 'MINUS' token. If found, it consumes it,
-        recursively calls `parse_factor()` for the operand, and returns a `UnaryOperation` node.
-        If not, it calls `parse_primary()` for the highest-precedence elements.
-        """
-        pass
+        token_type = self.current_token()[0]
+        
+        if token_type in ('PLUS', 'MINUS'): # handles stuff like +x or -x
+            op = self.current_token()
+            self.advance()
+            expr = self.parse_factor()
+            return UnaryOperation(op, expr)
+        
+        if token_type == 'LPAREN': # handles parentheses
+            self.advance()
+            expr = self.parse_boolean_expression()
+            self.expect('RPAREN')
+            return expr
+        
+        if token_type in ('NUMBER', 'IDENTIFIER'): # handles simple numbers or var names
+            current_token = self.current_token()
+            self.advance()
+            return current_token
+        
+        raise SyntaxError("Unexpected Token") # edge case
 
     # TODO: Implement this function
     def parse_primary(self) -> ExprType:
-        """
-        Why this function is needed: This function is at the bottom of the expression parsing
-        hierarchy. It handles the most basic, highest-precedence elements of expressions. These
-        are the "atoms" of an expression.
-
-        What this function does: It checks for three cases:
-        1. A 'NUMBER' token.
-        2. An 'IDENTIFIER' token (a variable).
-        3. An opening parenthesis 'LPAREN'. If found, it recursively calls `parse_boolean_expression()`
-           to parse the entire expression inside the parentheses, and then expects a closing 'RPAREN'.
-           This allows for manually overriding operator precedence (e.g., `(a + b) * c`).
-        """
-        pass
+        token_type = self.current_token()[0]
+        
+        if token_type == 'NUMBER': # handles numbers
+            tok = self.current_token()
+            self.advance()
+            return tok
+        
+        if token_type == 'IDENTIFIER': # handles var names
+            tok = self.current_token()
+            self.advance()
+            return tok
+        
+        if token_type == 'LPAREN': # parenthesis handling
+            self.advance()
+            expr = self.parse_boolean_expression()
+            self.expect('RPAREN')
+            return expr
+        
+        raise SyntaxError("Unexpected Token") # edge case
